@@ -1,0 +1,351 @@
+/* ─── Base reset & fonts ─────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+    font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background-color: #111827;
+    color: #f0f0f0;
+    margin: 0;
+    overflow: hidden;
+}
+
+/* ─── Layout ─────────────────────────────────────────────────────────────── */
+.container {
+    display: flex;
+    height: 100vh;
+}
+
+.main-content {
+    width: 50%;
+    padding: 32px 36px;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #1f2937;
+    gap: 0;
+    overflow-y: auto;
+}
+
+/* ─── Heading & subtitle ─────────────────────────────────────────────────── */
+h1 {
+    margin: 0 0 6px 0;
+    font-size: 1.7rem;
+    font-weight: 700;
+    background: linear-gradient(135deg, #60a5fa, #a78bfa);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+.subtitle {
+    margin: 0 0 20px 0;
+    font-size: 0.875rem;
+    color: #9ca3af;
+    line-height: 1.5;
+}
+
+/* ─── Provider + Model selectors ─────────────────────────────────────────── */
+.model-selector-row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+
+.selector-group {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.selector-group label {
+    font-size: 0.725rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: #6b7280;
+}
+
+select {
+    width: 100%;
+    background-color: #1f2937;
+    border: 1px solid #374151;
+    color: #f0f0f0;
+    border-radius: 8px;
+    padding: 9px 12px;
+    font-size: 0.875rem;
+    font-family: inherit;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7280' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+select:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+select:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* ─── Model status message ───────────────────────────────────────────────── */
+.model-status {
+    font-size: 0.75rem;
+    min-height: 18px;
+    margin-bottom: 10px;
+    color: #6b7280;
+    transition: color 0.2s;
+}
+
+.model-status.success { color: #34d399; }
+.model-status.error   { color: #f87171; }
+
+/* ─── Textarea ────────────────────────────────────────────────────────────── */
+textarea {
+    width: 100%;
+    height: 130px;
+    background-color: #1f2937;
+    border: 1px solid #374151;
+    color: #f0f0f0;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    resize: vertical;
+    transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+textarea:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+}
+
+.char-count {
+    margin: 4px 0 0 0;
+    font-size: 0.72rem;
+    color: #6b7280;
+    text-align: right;
+}
+
+/* ─── Generate button ────────────────────────────────────────────────────── */
+button {
+    background: linear-gradient(135deg, #6366f1, #8b5cf6);
+    color: white;
+    border: none;
+    padding: 11px 24px;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-top: 14px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    font-family: inherit;
+    letter-spacing: 0.02em;
+    transition: opacity 0.2s, transform 0.15s, box-shadow 0.2s;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+}
+
+button:hover:not(:disabled) {
+    opacity: 0.92;
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+}
+
+button:active:not(:disabled) {
+    transform: translateY(0);
+}
+
+button:disabled {
+    background: #374151;
+    box-shadow: none;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+/* ─── Console ────────────────────────────────────────────────────────────── */
+.console {
+    flex: 1;
+    min-height: 140px;
+    margin-top: 18px;
+    background-color: #0f172a;
+    border: 1px solid #1f2937;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.console-header {
+    background-color: #1e293b;
+    padding: 9px 14px;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #94a3b8;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.console-output {
+    padding: 10px 14px;
+    overflow-y: auto;
+    flex-grow: 1;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 0.8rem;
+    line-height: 1.6;
+    color: #cbd5e1;
+}
+
+/* ─── App-name banner inside the console ─────────────────────────────────── */
+.app-name-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 8px 0;
+    padding: 8px 12px;
+    background: linear-gradient(135deg, rgba(99,102,241,0.18), rgba(139,92,246,0.18));
+    border: 1px solid rgba(99,102,241,0.35);
+    border-radius: 6px;
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+}
+
+.banner-label {
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #818cf8;
+    white-space: nowrap;
+}
+
+.banner-name {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: #e0e7ff;
+    letter-spacing: 0.01em;
+}
+
+/* ─── Status badges ──────────────────────────────────────────────────────── */
+.status-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    display: none;
+}
+
+.status-badge:not(:empty) { display: inline-block; }
+
+.badge-running { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.badge-done    { background: rgba(52, 211, 153, 0.15); color: #34d399; }
+.badge-error   { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+
+/* ─── Preview panel ──────────────────────────────────────────────────────── */
+.preview-container {
+    width: 50%;
+    display: flex;
+    flex-direction: column;
+}
+
+.preview-header {
+    background-color: #1e293b;
+    padding: 8px 14px;
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #94a3b8;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+/* Wrapper for the header buttons */
+.preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* ── Refresh — ghost pill ───────────────────────────────────────────────── */
+.preview-btn {
+    background: transparent;
+    border: 1px solid #334155;
+    color: #94a3b8;
+    padding: 5px 13px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-family: inherit;
+    letter-spacing: 0.04em;
+    cursor: pointer;
+    margin-top: 0;
+    box-shadow: none;
+    transition: border-color 0.2s, color 0.2s, background 0.2s;
+    white-space: nowrap;
+}
+
+.preview-btn:hover:not(:disabled) {
+    border-color: #6366f1;
+    color: #e0e7ff;
+    background: rgba(99, 102, 241, 0.12);
+    transform: none;
+    box-shadow: none;
+}
+
+.preview-btn:disabled {
+    background: transparent;
+    border-color: #1e293b;
+    color: #2d3f55;
+    box-shadow: none;
+    cursor: not-allowed;
+    opacity: 1;
+}
+
+/* ── Download Project — solid green pill ────────────────────────────────── */
+.download-btn {
+    background: transparent;
+    border-color: #1e293b;
+    color: #2d3f55;   /* starts disabled-looking */
+}
+
+/* When enabled, flip to a vivid green solid pill */
+.download-btn:not(:disabled) {
+    background: linear-gradient(135deg, #059669, #10b981);
+    border-color: transparent;
+    color: #ecfdf5;
+    box-shadow: 0 3px 12px rgba(16, 185, 129, 0.35);
+}
+
+.download-btn:not(:disabled):hover {
+    background: linear-gradient(135deg, #047857, #059669);
+    border-color: transparent;
+    color: #ffffff;
+    box-shadow: 0 5px 18px rgba(16, 185, 129, 0.45);
+    transform: translateY(-1px);
+}
+
+.download-btn:not(:disabled):active {
+    transform: translateY(0);
+    box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3);
+}
+
+iframe {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background-color: white;
+}

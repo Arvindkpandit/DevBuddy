@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dev Buddy — AI App Generator</title>
+    <meta name="description"
+        content="Describe the app you want and Dev Buddy's AI agents will plan, architect, and code it for you — powered by Gemini, Groq, or Ollama.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+
+<body>
+    <div class="container">
+        <!-- ── Left panel ─────────────────────────────────────────── -->
+        <div class="main-content">
+            <h1>⚡ Dev Buddy</h1>
+            <p class="subtitle">Describe the app you want to build and AI agents will plan, architect, and code it for
+                you.</p>
+            <p style="color: red;">Note: Ollama works only on local machine. Make sure you have Ollama running on your
+                machine.<br>This is a demo link use i have used free api keys for demo purpose<br>For best result use
+                groq provider and openai/gpt-oss-120b model</p>
+
+            <!-- Provider & Model selectors -->
+            <div class="model-selector-row">
+                <div class="selector-group">
+                    <label for="providerSelect">Provider</label>
+                    <select id="providerSelect">
+                        <option value="groq">Groq</option>
+                        <option value="gemini">Gemini</option>
+                        <option value="ollama">Ollama</option>
+                    </select>
+                </div>
+
+                <div class="selector-group">
+                    <label for="modelSelect">Model</label>
+                    <select id="modelSelect">
+                        <!-- Populated dynamically by script.js -->
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="modelStatus" class="model-status"></div>
+
+            <!-- Requirements input -->
+            <textarea id="requirements" placeholder="e.g., A simple to-do list app with a clean interface…"
+                maxlength="2000"></textarea>
+            <p id="charCount" class="char-count">0 / 2000</p>
+
+            <button id="submitBtn">Generate App</button>
+
+            <!-- Console -->
+            <div class="console" id="console">
+                <div class="console-header">
+                    <span>Console</span>
+                    <span id="statusBadge" class="status-badge"></span>
+                </div>
+                <div class="console-output" id="consoleOutput"></div>
+            </div>
+        </div>
+
+        <!-- ── Right panel — Preview ───────────────────────────────── -->
+        <div class="preview-container">
+            <div class="preview-header">
+                <span>Preview</span>
+                <div class="preview-actions">
+                    <button id="refreshBtn" class="preview-btn" title="Reload preview" disabled>↺ Refresh</button>
+                    <button id="downloadBtn" class="preview-btn download-btn" title="Download project as ZIP" disabled>⬇
+                        Download Project</button>
+                </div>
+            </div>
+            <iframe id="preview" src="about:blank" title="Generated app preview"></iframe>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+
+</html>
