@@ -1,0 +1,810 @@
+# 🚀 Dev Buddy — Complete Interview Guide
+
+> **Project:** Dev Buddy — AI-Powered App Builder  
+> **Stack:** FastAPI · LangGraph · LangChain · Pydantic · Vanilla JS  
+> **Purpose:** Takes a plain-English prompt → generates a working HTML/CSS/JS web app using a multi-agent AI pipeline  
+
+---
+
+## 📐 High-Level Architecture
+
+```
+USER (Browser)
+     │  HTTP POST /generate  (prompt, provider, model)
+     ▼
+┌────────────────────────────────────────┐
+│           server.py  (FastAPI)          │
+│  ┌─────────────┐  ┌──────────────────┐ │
+│  │  /generate  │  │  /status/:taskId │ │
+│  │  /download  │  │  /api/providers  │ │
+│  └─────────────┘  └──────────────────┘ │
+└────────────────────────────────────────┘
+     │  background task
+     ▼
+┌────────────────────────────────────────┐
+│          agent/graph.py  (LangGraph)    │
+│                                        │
+│  planner_agent → architect_agent → coder_agent (loop) │
+└────────────────────────────────────────┘
+     │  uses LLMs from
+     ▼
+┌────────────────────────────────────────┐
+│       agent/llm_providers.py            │
+│   Gemini  |  Groq  |  Ollama           │
+└────────────────────────────────────────┘
+     │  writes files via
+     ▼
+┌────────────────────────────────────────┐
+│         agent/tools.py                  │
+│  write_file · read_file · list_files   │
+│  get_current_directory · run_cmd       │
+└────────────────────────────────────────┘
+     │  data models from
+     ▼
+┌────────────────────────────────────────┐
+│         agent/states.py  (Pydantic)     │
+│   File · Plan · TaskPlan · CoderState  │
+└────────────────────────────────────────┘
+     │  output lands in
+     ▼
+  generated_project/<app-slug>/index.html  ← served as static files
+```
+
+---
+
+## 📁 File-by-File Breakdown
+
+---
+
+## 1. [server.py](file:///d:/Skills/app-builder/server.py) — The FastAPI Web Server
+
+**Role:** Entry point for all HTTP traffic. Orchestrates background agent tasks and serves outputs.
+
+### Why FastAPI?
+- **Async-first** — handles many concurrent requests without blocking.
+- **Auto-documentation** at `/docs` (Swagger UI).
+- **Pydantic integration** — request/response validation is built-in.
+
+---
+
+### `MAX_PROMPT_LENGTH = 2000`
+- A simple guardrail constant.
+- Prevents abuse (huge prompts → huge LLM bills) and sets a UX contract with the frontend.
+- **Interview angle:** "How do you prevent abuse?" — Input validation both client-side (HTML `maxlength`) and server-side.
+
+---
+
+### `tasks = {}`
+```python
+tasks = {}
+```
+- An **in-memory dictionary** acting as a simple task store.
+- Key: `task_id` (UUID string). Value: a dict with [status](file:///d:/Skills/app-builder/server.py#140-159), `logs`, `app_name`, `project_dir`.
+- **Trade-off to know:** Not persistent across restarts. For production, you'd use Redis or a database. The code cleans up finished tasks after the status is fetched (line 155-156) to avoid memory leaks.
+
+---
+
+### `GET /api/providers/{provider}/models`
+```python
+async def list_models(provider: str):
+```
+- **Purpose:** Returns the list of AI models available for a given provider.
+- Calls [get_models_for_provider()](file:///d:/Skills/app-builder/agent/llm_providers.py#134-145) from [llm_providers.py](file:///d:/Skills/app-builder/agent/llm_providers.py).
+- Handles: `ValueError` (bad provider) → 400, any other exception → 500.
+- **Interview angle:** RESTful design — resources are `/providers/{id}/models`, not a flat `/get-models?provider=...`.
+
+---
+
+### [run_agent_background(task_id, prompt, provider, model)](file:///d:/Skills/app-builder/server.py#48-92) ← `async`
+```python
+async def run_agent_background(task_id, prompt, provider, model):
+```
+- **The critical bridge** between the web server and the AI agent.
+- Runs in an `asyncio` BackgroundTask — so the HTTP response returns immediately with a `task_id`.
+- Uses `loop.run_in_executor(None, agent_process)` to run the **synchronous** [run_agent()](file:///d:/Skills/app-builder/agent/graph.py#155-190) call in a **thread pool** — this is the correct pattern to avoid blocking the async event loop.
+
+**Inner [agent_process()](file:///d:/Skills/app-builder/server.py#56-90) function:**
+- Defines an [on_update(event)](file:///d:/Skills/app-builder/server.py#62-76) callback that reads the planner output and appends logs.
+- Calls [run_agent(prompt, on_update, provider, model)](file:///d:/Skills/app-builder/agent/graph.py#155-190).
+- On completion: sets `status = "done"` and stores `app_name`, `project_dir`.
+- On failure: sets `status = "error"`, appends exception message.
+
+> 💡 **Key concept:** `asyncio.get_running_loop().run_in_executor(None, fn)` — runs a blocking function in a separate thread without freezing the event loop. This is essential when mixing sync and async code.
+
+---
+
+### `POST /generate`
+```python
+async def generate_app(prompt_data: dict, background_tasks: BackgroundTasks):
+```
+- **Input validation:**
+  1. Prompt must be non-empty.
+  2. Prompt ≤ 2000 chars.
+  3. Provider must be `gemini | groq | ollama`.
+- Creates a UUID task ID via `str(uuid.uuid4())`.
+- Initializes the task dict with `status: "starting"`.
+- Adds [run_agent_background](file:///d:/Skills/app-builder/server.py#48-92) as a FastAPI `BackgroundTask`.
+- Returns `{"task_id": "..."}` immediately — the client then polls.
+
+> 💡 **Design pattern:** Long-running task → Background job + polling. This is the standard async job pattern for web APIs. Alternative would be WebSockets or SSE for real-time push.
+
+---
+
+### `GET /status/{task_id}`
+```python
+async def get_status(task_id: str):
+```
+- Polls the in-memory `tasks` dict.
+- Returns [status](file:///d:/Skills/app-builder/server.py#140-159), `logs`, `app_name`, `project_dir`.
+- **Cleanup:** Once status is `"done"` or `"error"`, the task is removed from the dict (`tasks.pop`). This prevents unbounded memory growth.
+- Returns 404 if `task_id` is not found.
+
+---
+
+### `GET /download/{folder_name}`
+```python
+async def download_project(folder_name: str):
+```
+- Locates the subfolder in `generated_project/`.
+- Builds a **ZIP file in memory** using `io.BytesIO()` — no temp file on disk.
+- Uses `zipfile.ZIP_DEFLATED` compression.
+- Walks all files recursively with `project_path.rglob("*")`.
+- Stores each file with a path **relative** to the project folder using `file_path.relative_to(project_path)`.
+- Returns a `StreamingResponse` with `Content-Disposition: attachment` header → browser shows Save As dialog.
+
+> 💡 **Why in-memory ZIP?** No disk I/O, no temp file cleanup, no race conditions. The `buffer.seek(0)` after writing rewinds the stream so it can be read from the start.
+
+---
+
+### Static File Mounts (order matters!)
+```python
+app.mount("/generated_project", StaticFiles(directory=str(GENERATED_BASE)), ...)
+app.mount("/", StaticFiles(directory="frontend", html=True), ...)
+```
+- `/generated_project` must be mounted **before** `/` because FastAPI mounts are matched in registration order.
+- The `html=True` flag on the frontend mount enables automatic `index.html` serving.
+- **Interview angle:** "Why does order matter?" — A catch-all `/` mount last means it won't intercept API routes which were registered first.
+
+---
+
+## 2. `agent/graph.py` — The LangGraph Agent Pipeline
+
+**Role:** Defines and runs the multi-agent AI workflow using LangGraph's `StateGraph`.
+
+---
+
+### `GENERATED_BASE = pathlib.Path.cwd() / "generated_project"`
+- The root folder where all generated apps are saved.
+- Shared between `graph.py` (creates subdirs) and `server.py` (serves as static files).
+
+---
+
+### `_slugify(name: str) → str`
+```python
+def _slugify(name: str) -> str:
+    return name.lower().strip().replace(' ', '-')
+```
+- Converts an app name like `"My Todo App"` → `"my-todo-app"` (safe for a filesystem folder name and URL path).
+- **Why needed?** Folder names can't have spaces or special characters on all OSes, and the name is also used in the URL `/generated_project/my-todo-app/`.
+
+---
+
+### `_extract_json(text: str) → dict`
+```python
+def _extract_json(text: str) -> dict:
+```
+- **Problem it solves:** LLMs often wrap JSON in markdown code fences (` ```json ... ``` `), even when instructed not to. This function robustly strips those fences.
+- Uses `re.sub` with two patterns to strip opening and closing fences.
+- Then finds the first `{` and last `}` to robustly extract the JSON object even if there's surrounding text.
+- Falls back to `json.loads(text)` if no `{` found.
+
+> 💡 **Interview angle:** "How do you handle unreliable LLM output?" — Defensive parsing, regex stripping, and structured prompting (requiring JSON output) are all layers of defense.
+
+---
+
+### `build_agent(provider, model) → CompiledGraph`
+This is the **factory function** that builds and compiles the entire agent pipeline for a given LLM.
+
+#### `planner_agent(state: dict) → dict`
+- **Input:** `state["user_prompt"]` — the raw user request.
+- **Action:** Calls `llm.invoke(planner_prompt(user_prompt))` — sends prompt to the LLM.
+- **Output parsing:** `_extract_json(raw)` → validated with Pydantic `Plan(**data)`.
+- **Folder creation:**
+  - Slugifies the plan name.
+  - Checks if the folder already exists; appends `-1`, `-2`, etc. if so (deduplication loop).
+  - Creates the folder with `mkdir(parents=True, exist_ok=True)`.
+  - Calls `set_project_root(project_dir)` so all file tools point to this new folder.
+- **Returns:** Adds `plan`, `app_name`, and `project_dir` to the graph state.
+
+#### `architect_agent(state: dict) → dict`
+- **Input:** `state["plan"]` — the `Plan` Pydantic object.
+- **Action:** Calls `llm.invoke(architect_prompt(plan=plan.model_dump_json()))`.
+  - `model_dump_json()` is a Pydantic v2 method — serializes the model to a JSON string.
+- **Output parsing:** Parses into `TaskPlan(**data)`.
+- **Key:** Also sets `task_plan.plan = plan` so the coder has full context.
+- **Returns:** Adds `task_plan` to graph state.
+
+#### `coder_agent(state: dict) → dict`
+- **Input:** `state["coder_state"]` (or creates a fresh `CoderState`).
+- **Pattern: Step-by-step iteration.**
+  1. Gets the current step from `coder_state.task_plan.implementation_steps[current_step_idx]`.
+  2. Reads the existing file content (returns `""` if new file).
+  3. Builds a user prompt with: task description, file path, and current file content.
+  4. Creates a **ReAct agent** (`create_react_agent`) — a special LangGraph agent that reasons then acts with tools.
+  5. The ReAct agent is given `[write_file, read_file, list_files, get_current_directory]` as tools.
+  6. Increments `current_step_idx`.
+- **Returns:** Updated `coder_state`.
+- **Loop condition:** The conditional edge checks if `status == "DONE"` (all steps complete).
+
+> 💡 **Why ReAct?** ReAct (Reason + Act) allows the LLM to think step-by-step, call tools, observe results, and adapt — rather than generating all code in one shot. This handles context-updating (e.g., reading what's already been written).
+
+---
+
+### Graph Topology
+```python
+graph.add_edge("planner",   "architect")
+graph.add_edge("architect", "coder")
+graph.add_conditional_edges(
+    "coder",
+    lambda s: "END" if s.get("status") == "DONE" else "coder",
+    {"END": END, "coder": "coder"}
+)
+```
+- Linear: planner → architect → coder.
+- Coder **loops back to itself** until all files are written.
+- `graph.set_entry_point("planner")` — defines where execution starts.
+- `graph.compile()` — validates the graph and compiles it into a runnable object.
+
+> 💡 **Interview angle:** "What is LangGraph?" — It's a framework for building **stateful, graph-based multi-agent workflows**. Unlike a simple LLM chain, a graph can loop, branch, and pass structured state between nodes.
+
+---
+
+### `run_agent(user_prompt, on_state_update, provider, model) → dict`
+```python
+def run_agent(user_prompt, on_state_update, provider, model) -> dict:
+```
+- Calls `build_agent(provider, model)` — creates a fresh compiled agent for each run.
+- Uses `compiled_agent.stream(...)` with `stream_mode="updates"` — emits state diffs after each node.
+- Each event is passed to `on_state_update(event)` — the callback from `server.py` that appends logs.
+- Captures `app_name` and `project_dir` from the planner's output in the stream.
+- **Returns:** `{"app_name": ..., "project_dir": ...}` for `server.py` to store.
+
+---
+
+## 3. `agent/llm_providers.py` — LLM Provider Abstraction
+
+**Role:** Factory and discovery layer for AI models. Isolates all provider-specific code.
+
+---
+
+### Private Initializers
+
+#### `_init_gemini(model: str)`
+- Imports `ChatGoogleGenerativeAI` from `langchain-google-genai`.
+- Reads `GEMINI_API_KEY` from environment.
+- Sets `temperature=0.1` — low temperature for deterministic, code-quality output.
+
+#### `_init_groq(model: str)`
+- Imports `ChatGroq` from `langchain-groq`.
+- Reads `GROQ_API_KEY` from environment.
+- Same low temperature setting.
+
+#### `_init_ollama(model: str)`
+- Imports `ChatOllama` from `langchain-ollama`.
+- Reads optional `OLLAMA_API_KEY` — Ollama is typically local and doesn't need a key.
+- Reads `OLLAMA_BASE_URL` for the local server address.
+
+> 💡 **Why private functions (`_init_*`)?** Convention to signal "internal use only." The public interface is `init_llm()` — one consistent entry point.
+
+---
+
+### `init_llm(provider: str, model: str)` ← Public Factory
+```python
+def init_llm(provider: str, model: str):
+```
+- **Design pattern: Factory Method.** Single entry point that dispatches to the correct initializer.
+- Normalizes the provider string: `.lower().strip()`.
+- Returns a **LangChain-compatible chat model** — the rest of the code uses the same interface regardless of which LLM is chosen.
+- Raises `ValueError` for unknown providers — caught in `server.py`.
+
+> 💡 **Interview angle:** All three LLMs implement the same LangChain `BaseChatModel` interface. This is the **strategy pattern** — behavior varies by provider but the calling code stays the same.
+
+---
+
+### Model Discovery Functions
+
+#### `get_gemini_models() → list[str]`
+- Returns a static `GEMINI_MODELS` list — hardcoded because Google's API doesn't have a simple public list endpoint for chat models.
+
+#### `get_groq_models() → list[str]`
+- Makes a **live HTTP GET** to `https://api.groq.com/openai/v1/models`.
+- Groq's API is OpenAI-compatible, so it uses the `Authorization: Bearer {api_key}` header.
+- Extracts model IDs with `[m["id"] for m in data["data"]]`.
+- Returns sorted list for a cleaner UI dropdown.
+
+#### `get_ollama_models() → list[str]`
+- Makes a live HTTP GET to `http://localhost:11434/api/tags` (Ollama's local API).
+- Handles `ConnectionError` specifically — if Ollama isn't running, gives a clear error message instead of a generic crash.
+
+#### `get_models_for_provider(provider: str) → list[str]` ← Public
+- Same factory pattern as `init_llm` — dispatches to the right discovery function.
+- This is called by the `/api/providers/{provider}/models` endpoint.
+
+---
+
+## 4. `agent/states.py` — Pydantic Data Models
+
+**Role:** Defines the strongly-typed data structures that flow through the agent pipeline.
+
+---
+
+### `File`
+```python
+class File(BaseModel):
+    path: str
+    purpose: str
+```
+- Represents a single file in the project plan.
+- Used inside `Plan.files`.
+
+---
+
+### `Plan`
+```python
+class Plan(BaseModel):
+    name: str
+    description: str
+    tech_stack: str
+    features: list[str]
+    files: list[File]
+```
+- The output of the **planner agent**.
+- `name` → becomes the app folder slug.
+- `files` → high-level file list (path + purpose). Not the actual code.
+- **Validated by Pydantic** — if the LLM hallucinates an extra field or wrong type, Pydantic raises a `ValidationError`.
+
+---
+
+### `ImplementationPlan`
+```python
+class ImplementationPlan(BaseModel):
+    file_path: str
+    task_description: str
+```
+- One step in the build process: "write `style.css` with these exact rules."
+- Used inside `TaskPlan.implementation_steps`.
+
+---
+
+### `TaskPlan`
+```python
+class TaskPlan(BaseModel):
+    implementation_steps: list[ImplementationPlan]
+    model_config = ConfigDict(extra="allow")
+```
+- Output of the **architect agent**.
+- `extra="allow"` — Pydantic v2 config that permits extra JSON fields without raising an error. Important because the LLM might add extra metadata fields.
+- Has a `.plan` attribute added dynamically after construction (`task_plan.plan = plan`).
+
+---
+
+### `CoderState`
+```python
+class CoderState(BaseModel):
+    task_plan: TaskPlan
+    current_step_idx: int = 0
+    current_file_content: Optional[str] = None
+```
+- Tracks **progress through the implementation steps**.
+- `current_step_idx` — which file is being worked on (0-indexed counter).
+- `current_file_content` — optional buffer (not heavily used, but available for context).
+- This is passed through the `coder` graph node on every loop iteration.
+
+> 💡 **Interview angle:** "Why Pydantic?" — Automatic validation, type coercion, serialization (`model_dump_json()`), and self-documenting schemas. It's the backbone of FastAPI and LangChain's structured output.
+
+---
+
+## 5. `agent/tools.py` — LangChain Tools
+
+**Role:** Gives the coder agent the ability to interact with the filesystem. These are `@tool`-decorated functions — LangChain passes their docstrings to the LLM as tool descriptions.
+
+---
+
+### Global State: `_project_root`
+```python
+_project_root = pathlib.Path.cwd() / "generated_project"
+```
+- A module-level global that tracks the **current project directory**.
+- Changed per-run by `set_project_root()`.
+- **Why global?** The LangChain `@tool` functions don't accept extra arguments (they're called by the LLM). The project root needs to be set externally.
+
+---
+
+### `set_project_root(path: pathlib.Path)`
+- Updates `_project_root` to the new run's folder.
+- Also creates the directory if it doesn't exist.
+- Called by `planner_agent` in `graph.py` after creating the folder.
+
+---
+
+### `get_project_root() → pathlib.Path`
+- Simple getter. Used internally by tools to resolve relative paths.
+
+---
+
+### `safe_path_for_project(path: str) → pathlib.Path` ← Security
+```python
+def safe_path_for_project(path: str) -> pathlib.Path:
+    root = get_project_root().resolve()
+    p = (get_project_root() / path).resolve()
+    if root not in p.parents and root != p.parent and root != p:
+        raise ValueError(f"Path {p} is not within the project root {root}")
+    return p
+```
+- **Path traversal prevention.** Ensures the LLM can't write files outside the project folder by using `../../../` tricks.
+- Uses `.resolve()` to convert to absolute path (resolves symlinks and `..`).
+- Checks that the resolved path's parents include the project root.
+- Raises `ValueError` if not — the tool call will fail safely.
+
+> 💡 **Critical security concept:** Always validate/sanitize file paths when an AI or user controls the path. This prevents **directory traversal attacks**.
+
+---
+
+### `@tool write_file(path: str, content: str) → str`
+```python
+@tool
+def write_file(path: str, content: str) -> str:
+```
+- The most important tool — the coder agent uses this to save generated code.
+- Calls `safe_path_for_project(path)` for security.
+- Creates parent directories if needed (`p.parent.mkdir(parents=True, exist_ok=True)`).
+- Opens with `encoding="utf-8"` — important for cross-platform compatibility.
+- Returns a confirmation string — the LLM sees this as the tool result.
+
+---
+
+### `@tool read_file(path: str) → str`
+```python
+@tool
+def read_file(path: str) -> str:
+```
+- Reads an existing file's content.
+- Returns `""` (empty string) if file doesn't exist — not an error. This is intentional: the coder checks this to know if a file is new.
+
+---
+
+### `@tool get_current_directory() → str`
+```python
+@tool
+def get_current_directory() -> str:
+```
+- Returns the project root path as a string.
+- Helps the LLM understand its working context when constructing paths.
+
+---
+
+### `@tool list_files(directory: str = ".") → str`
+```python
+@tool
+def list_files(directory: str = ".") -> str:
+```
+- Lists all files in a directory recursively using `rglob("*")`.
+- Returns newline-separated relative paths.
+- The docstring specifically says `EXACT name is 'list_files'` — because LLMs sometimes hallucinate tool names.
+
+---
+
+### `@tool run_cmd(cmd: str, cwd: str = None, timeout: int = 30)`
+```python
+@tool
+def run_cmd(cmd, cwd, timeout) -> Tuple[int, str, str]:
+```
+- Runs a shell command using `subprocess.run`.
+- `shell=True` — passes command as a string to the OS shell.
+- Returns `(returncode, stdout, stderr)` tuple.
+- Has a `timeout` — prevents the agent from hanging indefinitely.
+- **Note:** This tool is defined but not passed to the ReAct agent in `coder_agent` (it's omitted from `coder_tools`). It was kept for potential future use.
+
+---
+
+### `init_project_root(project_path=None)`
+- Non-tool helper function (not `@tool` decorated) — called from other Python code, not by the LLM.
+- Sets the project root if provided, otherwise ensures the default exists.
+
+---
+
+## 6. `agent/prompts.py` — Prompt Engineering
+
+**Role:** Contains the system prompts that define each agent's behavior and output format.
+
+---
+
+### `planner_prompt(user_input: str) → str`
+Instructs the LLM to act as a **Planner**:
+- Scope limit: only HTML/CSS/Vanilla JS. No frameworks, no backend.
+- File limit: max 4 files.
+- Output: **strict JSON only** — no markdown, no explanation.
+- The JSON schema is embedded in the prompt itself as an example.
+
+> 💡 **Prompt engineering principles used:**
+> - Role assignment ("You are a planner agent")
+> - Explicit constraints as bullet-pointed rules
+> - Output format specification with an example
+> - Injection of user variable at the end
+
+---
+
+### `architect_prompt(plan: str) → str`
+Instructs the LLM to act as an **Architect**:
+- Input: the JSON-serialized `Plan`.
+- One step per file, ordered by dependency (CSS → JS → HTML last).
+- Each step must be **fully specified** — no TODOs.
+- The step must describe: variable names, event listeners, CSS class names, IDs.
+- Output: strict JSON — `{"implementation_steps": [...]}`.
+
+> 💡 **Why order CSS before HTML?** Because the coder agent reads existing files to maintain consistency. CSS class names defined first can be referenced in later JS and HTML steps.
+
+---
+
+### `coder_prompt() → str`
+Instructs the LLM to act as a **Coder**:
+- Lists available tools with **exact names** — critical because LLMs may hallucinate tool names.
+- Code quality rules: no placeholders, no TODOs, vanilla JS only.
+- Workflow: read first, implement fully, save with `write_file`, double-check references.
+
+---
+
+## 7. `agent/prompts.py` — Plan vs Architecture vs Code
+
+| Stage | Input | Output | Agent |
+|-------|-------|--------|-------|
+| Plan | User prompt (text) | `Plan` JSON (name, files, features) | planner |
+| Architect | `Plan` JSON | `TaskPlan` JSON (ordered steps per file) | architect |
+| Code | One `ImplementationPlan` step | Actual file written to disk | coder (ReAct loop) |
+
+---
+
+## 8. `main.py` — CLI Entry Point
+
+**Role:** Alternative way to run the agent from the command line (without the web server).
+
+```python
+def main():
+    parser = argparse.ArgumentParser(...)
+    parser.add_argument("--recursion-limit", "-r", ...)
+    user_prompt = input("Enter your prompt: ")
+    result = agent.invoke({"user_prompt": user_prompt}, {"recursion_limit": args.recursion_limit})
+```
+- Uses `argparse` for CLI argument parsing.
+- `agent.invoke(...)` — synchronous invocation (vs `stream()` in the web path).
+- `recursion_limit` — LangGraph has a default recursion limit to prevent infinite loops. This exposes it as a CLI flag.
+- Handles `KeyboardInterrupt` gracefully and logs exceptions to stderr.
+
+> 💡 The `main.py` imports a module-level `agent` from `graph.py` but the web server (`server.py`) calls `build_agent()` per-request to pick the correct LLM. The CLI uses a default (Gemini) agent.
+
+---
+
+## 9. `frontend/` — The Web UI
+
+### `index.html`
+- Two-panel layout: left (inputs + console) and right (preview + download).
+- Provider `<select>` with static options: Gemini, Groq, Ollama.
+- Model `<select>` with `Loading…` placeholder — populated dynamically.
+- `<textarea id="requirements">` with `maxlength="2000"` — client-side guard matching the server's `MAX_PROMPT_LENGTH`.
+- `<iframe id="preview">` — sandboxed browser within the browser for showing the generated app.
+- Download and Refresh buttons start as `disabled` — enabled only after a successful generation.
+
+---
+
+### `frontend/script.js` — Core Frontend Logic
+
+#### DOM References (top of file)
+All DOM elements are captured once at the top. This is a performance best practice — avoids repeated `getElementById` calls.
+
+#### `loadModels(provider)` ← `async`
+```javascript
+async function loadModels(provider) {
+```
+- Fetches `/api/providers/${provider}/models`.
+- Shows "Loading…" while fetching.
+- On success: populates `<select>` with `<option>` elements.
+- On failure: shows error message in `modelStatus` div.
+- Called on page load and on every `providerSelect` change event.
+
+---
+
+#### `stopPolling()`
+```javascript
+function stopPolling() {
+    clearInterval(pollingInterval);
+    clearTimeout(pollingTimeout);
+}
+```
+- Clears both the interval timer AND the timeout timer.
+- Must clear both to prevent memory leaks and phantom callbacks.
+
+---
+
+#### `setBadge(text, cls)`
+```javascript
+function setBadge(text, cls) {
+    statusBadge.textContent = text;
+    statusBadge.className = `status-badge ${cls}`;
+}
+```
+- Updates the status badge (running / done / error / timeout).
+- CSS classes drive the color (defined in `styles.css`).
+
+---
+
+#### `pollStatus(taskId)` ← The Polling Engine
+```javascript
+async function pollStatus(taskId) {
+```
+- Fetches `/status/${taskId}` every 1 second (set by `setInterval`).
+- **Incremental logging:** Tracks `lastLogCount` — only appends *new* log lines (`data.logs.slice(lastLogCount)`). Prevents duplicate console messages.
+- **App name banner:** Shows a highlighted banner when `app_name` is first received.
+- **Completion handling:**
+  - `"done"`: builds the preview URL from `projectDir`, sets `preview.src`, enables Refresh and Download buttons.
+  - `"error"`: shows the last log line as the error message.
+
+> 💡 **Why polling instead of WebSockets?** Simpler to implement, works through proxies, no persistent connection needed for a tool that runs occasionally. The trade-off is 1-second latency on updates.
+
+---
+
+#### `submitBtn` click handler
+```javascript
+submitBtn.addEventListener('click', async () => {
+```  
+- Validates: non-empty prompt, valid model selected.
+- Resets state: clears console, resets `lastLogCount`, clears `projectDir`.
+- Sets badge to `"running"`.
+- POSTs to `/generate` with `{ prompt, provider, model }`.
+- On success: starts `setInterval(() => pollStatus(taskId), 1000)` and a `setTimeout` for 10-minute max.
+
+---
+
+#### `refreshBtn` click handler
+```javascript
+refreshBtn.addEventListener('click', () => {
+    const base = preview.src.split('?')[0];
+    preview.src = `${base}?t=${Date.now()}`;
+});
+```
+- Reloads the iframe by appending a cache-busting timestamp (`?t=...`).
+- **Why?** Setting `iframe.src = iframe.src` doesn't always trigger a reload due to browser caching.
+
+---
+
+#### `downloadBtn` click handler
+```javascript
+downloadBtn.addEventListener('click', () => {
+    window.location.href = `/download/${folderName}`;
+});
+```
+- Navigates to the download endpoint — the browser's native download mechanism handles the ZIP.
+- `folderName` is extracted from `projectDir` using `.split(/[\\\/]/).pop()` (works on both Windows `\` and Unix `/` paths).
+
+---
+
+#### `logToConsole(message, type = 'message')`
+```javascript
+function logToConsole(message, type = 'message') {
+    const el = document.createElement('p');
+    el.textContent = `> ${message}`;
+    if (type === 'error')   el.style.color = '#f87171';
+    if (type === 'success') el.style.color = '#4ade80';
+    consoleOutput.appendChild(el);
+    consoleOutput.scrollTop = consoleOutput.scrollHeight;  // auto-scroll
+}
+```
+- Uses `textContent` (not `innerHTML`) — **XSS-safe**.
+- Auto-scrolls to bottom after each append.
+
+---
+
+#### `logAppNameBanner(appName)`
+```javascript
+function logAppNameBanner(appName) {
+```
+- Creates a styled banner `<div>` with the app name.
+- Uses `escapeHtml(appName)` before injecting into `innerHTML`.
+
+---
+
+#### `escapeHtml(str)`
+```javascript
+function escapeHtml(str) {
+    return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+```
+- Basic HTML entity escaping — prevents XSS when inserting LLM-generated names into the DOM.
+
+---
+
+## 10. `pyproject.toml` — Project Configuration
+
+### Key Dependencies
+| Package | Purpose |
+|---------|---------|
+| `fastapi` | Web framework — routing, request parsing, static files |
+| `uvicorn` | ASGI server — runs FastAPI in production |
+| `langchain` | Core LLM interaction primitives — chains, messages |
+| `langchain-core` | Base interfaces — `BaseChatModel`, `@tool` decorator |
+| `langchain-google-genai` | Google Gemini integration |
+| `langchain-groq` | Groq integration |
+| `langchain-ollama` | Ollama (local LLM) integration |
+| `langgraph` | Multi-agent stateful graphs — `StateGraph`, `create_react_agent` |
+| `pydantic` | Data validation, serialization, schema generation |
+| `python-dotenv` | Loads `.env` file into `os.environ` |
+
+---
+
+## 🎤 Top Interview Questions & Answers
+
+### Q1: Explain how the full flow works end-to-end.
+**A:** The user enters a prompt and clicks "Generate." The frontend POSTs to `/generate` with the prompt, provider, and model. The server creates a task ID, adds a background job, and returns immediately. The background job runs `run_agent()`, which builds a LangGraph pipeline: the **planner** LLM converts the prompt to a structured `Plan`, the **architect** creates ordered implementation steps, and the **coder** loops through each step using a ReAct agent with file-writing tools. The frontend polls `/status/{taskId}` every second to get logs. Once done, the generated files are served as static files and shown in an iframe preview.
+
+---
+
+### Q2: Why use `run_in_executor` in the background task?
+**A:** FastAPI is async, meaning it runs on an event loop. LangGraph and LangChain are mostly synchronous. If we called them directly in an `async` function, they would block the event loop — preventing other requests from being handled. `loop.run_in_executor(None, fn)` offloads the synchronous blocking call to a thread pool, keeping the event loop free.
+
+---
+
+### Q3: What is LangGraph and why use it instead of a simple chain?
+**A:** LangGraph is a framework for building cyclic, stateful, multi-agent workflows. Unlike a linear LangChain chain, a graph can have loops (the coder loops until all files are written), conditional branching, and typed state passing between nodes. This makes it ideal for complex tasks that require iteration, like writing multiple files that depend on each other.
+
+---
+
+### Q4: How does the ReAct agent in the coder work?
+**A:** ReAct (Reasoning + Acting) is a pattern where the LLM alternates between thinking ("I should read the existing file first") and acting (calling `read_file`). After each tool call, it sees the result and decides what to do next. This allows adaptive behavior — if a file already has some content, the agent can incorporate it. `create_react_agent(llm, tools)` is LangGraph's built-in ReAct implementation.
+
+---
+
+### Q5: How do you prevent the AI from writing files outside the project?
+**A:** The `safe_path_for_project()` function in `tools.py` resolves all paths to absolute form and checks that the resolved path is within the project root. This blocks path traversal attacks like `../../etc/passwd`.
+
+---
+
+### Q6: Why do you clean up tasks after status is fetched?
+**A:** The `tasks` dict is in-memory. Without cleanup, every completed task would stay there forever, causing a memory leak. Once a task is `"done"` or `"error"` and the client has fetched the status, the task is popped. Note: this is a one-shot design — if the client misses the final status poll, the task data is gone. For production, Redis with a TTL would be better.
+
+---
+
+### Q7: Why does the download endpoint build the ZIP in memory?
+**A:** Using `io.BytesIO()` avoids writing a temp file to disk, which would require cleanup logic and could fail in read-only environments. In-memory is faster and simpler for small project ZIPs. `buffer.seek(0)` rewinds the stream to the start before it's sent.
+
+---
+
+### Q8: What is the difference between `agent.invoke()` and `compiled_agent.stream()`?
+**A:** `invoke()` runs the graph to completion and returns the final state. `stream()` yields state updates after each node execution. We use `stream()` in the web server because we want to progressively send log updates to the client as each agent (planner, architect, coder steps) completes. `invoke()` is used in `main.py` for the CLI where we just want the final result.
+
+---
+
+### Q9: Why was Pydantic used for state models?
+**A:** Pydantic provides automatic type validation (catching bad LLM output early), serialization with `model_dump_json()` (for passing plan to architect prompt), and self-documenting schemas. It also integrates naturally with FastAPI and LangChain's structured output features.
+
+---
+
+### Q10: How does the frontend prevent XSS?
+**A:** `logToConsole()` uses `textContent` not `innerHTML`, which treats the content as plain text — no HTML is parsed. `logAppNameBanner()` does use `innerHTML` but first runs the app name through `escapeHtml()`, which replaces `&`, `<`, `>` with HTML entities.
+
+---
+
+## 🗺️ Overall Design Decisions Summary
+
+| Decision | Why |
+|----------|-----|
+| FastAPI + Uvicorn | Async, fast, auto-docs, production-ready |
+| Background tasks + polling | Simple async job pattern; avoids WebSocket complexity |
+| In-memory task store | Good enough for single-instance dev tool |
+| LangGraph StateGraph | Enables looping coder agent and clean state passing |
+| ReAct agent for coder | Allows adaptive file reading before writing |
+| Pydantic models | Validates unreliable LLM JSON output |
+| `_extract_json()` | Defensive LLM output parsing |
+| `safe_path_for_project()` | Security: prevents filesystem escape |
+| One provider interface | Strategy pattern — swappable LLMs |
+| Static JSON schema in prompts | Reliable structured output from LLMs |
+| In-memory ZIP for download | No temp files, simple, fast |
+| Static file mounts (ordered) | Specific paths before catch-all |

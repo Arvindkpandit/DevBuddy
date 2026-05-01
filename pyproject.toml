@@ -1,0 +1,19 @@
+[project]
+name = "Dev-Buddy"
+version = "0.1.0"
+description = "An agentic application that helps non tech people to build small scale full stack applications"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.121.2",
+    "langchain>=0.3.27",
+    "langchain-core>=0.3.72",
+    "langchain-google-genai>=2.0.0",
+    "langchain-groq>=0.2.0",
+    "langchain-ollama>=0.3.10",
+    "langgraph>=0.6.3",
+    "pip>=25.2",
+    "pydantic>=2.11.7",
+    "python-dotenv>=1.1.1",
+    "uvicorn>=0.38.0",
+]
